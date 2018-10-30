@@ -1,5 +1,5 @@
 data:
-  folder: /Users/chennuo/PycharmProjects/RecommendAlgoPractice/Data/dairy_data
+  folder: /Users/chennuo/Desktop/opera_train_on_dairy/Data/dairy_data
   start: 20181008
   end: 20181024
   sliding_window_d_length: 7

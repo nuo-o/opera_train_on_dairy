@@ -1,4 +1,4 @@
-import argparse, datetime, os, logging, yaml, ujson, pandas as pd
+import argparse, datetime, os, logging, yaml, ujson, cPickle, time, pickle
 from os import walk
 from collections import defaultdict
 
@@ -83,73 +83,34 @@ def separate_clicked_record(filepaths):
     return clicked_records, _clicked_records
 
 
-def normalize_jason_profile(profile, ):
-    raise NotImplementedError
-
-
-def search_nested_dict_bfs(root, item2search, saved_dict):
+def search_nested_dict_bfs(root, item2search, saved_dict=None):
     queue = [root]
     found_item = set()
 
-    while len(queue):
+    if not saved_dict:
+        saved_dict = defaultdict(list)
+
+    while len(queue) and len(found_item)<len(item2search):
         node = queue.pop()
 
-        for k, v in node.items():
-            if k in item2search:
-                saved_dict[k].append(v)
-                found_item.add(k)
-            elif isinstance(v, dict):
-                queue.append([v])
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k in item2search:
+                    saved_dict[k].append(v)
+                    found_item.add(k)
+                    if len(found_item) == len(item2search):
+                        return saved_dict
+                elif isinstance(v, dict):
+                    queue.append(v)
+        elif isinstance(node, list):
+            for i in node:
+                queue.append(i)
 
-    for not_found_item in [ i for i in item2search if i not in found_item]:
-        saved_dict[not_found_item].append([None])
+    not_found_item = [ i for i in item2search if i not in found_item]
+    for item in not_found_item:
+        saved_dict[item].append([None])
 
     return saved_dict
-
-#
-# def DFS_nested_dict(root, item2search, saved_dict):
-#     stack = root.keys()
-#
-#     while stack:
-#         if isinstance(root[stack], dict):
-#             stack.push( root[stack])
-#
-#
-#     if len(item2search):
-#         stack = root.keys()
-#
-#         while stack
-#
-#
-#         for k, item in root.items():
-#             if isinstance(item, dict):
-#                 DFS_nested_dict(item, item2search, saved_dict)
-#             elif k in item2search:
-#                 saved_dict[item].append(item)
-#                 item2search.pop(item)
-#     else:
-#         return saved_dict
-
-
-def search_feat_in_nested_dict(root, item2search, saved_dict):
-    searched_layer = nested_jason.copy()
-
-    while len(item2search) and isinstance(searched_layer, dict):
-        found_items = list(set(item2search) & set(searched_layer.keys()))
-        if found_items:
-            for item in found_items:
-                saved_dict[item].append(searched_layer[item])
-            item2search.pop(found_items)
-
-        # go to next layer
-        next_layers = []
-        next_layers = [v for k, v in searched_layer.items() if isinstance(k, dict)]
-
-        for layer in next_layers:
-            search_feat_in_nested_dict(layer, item2search, saved_dict)
-    #
-    # for item in item2search:
-    #     saved_dict[item].append([None])
 
 
 if __name__ == "__main__":
@@ -159,11 +120,6 @@ if __name__ == "__main__":
     data_paths = get_dairy_path(configs, "20181016", "20181016")
     print(data_paths)
     print( os.path.isdir(data_paths[0]))
-
-    user_records = []
-
-    # features:
-    features = defaultdict(list)
 
     user_feature_names = [
         'app_version',
@@ -204,8 +160,7 @@ if __name__ == "__main__":
         'sex'
     ]
 
-    # filter only active user data
-
+    # filter active user data
     active_records = []
 
     with open(data_paths[0]) as f:
@@ -219,25 +174,27 @@ if __name__ == "__main__":
                 label = news_profile[news_id]['label']
 
                 if label:
-                    for news, news_p in news_profile.items():
-
                     active_records.append(nested_dict)
                     break
 
+    print("number of active records: {}".format(len(active_records)))
     print(len(active_records))
 
     # extract features
-    features = []
+    instances = []
     for user_data in active_records:
         news_profile = user_data['news_profile']
         user_profile = user_data['user_profile']
 
-        tempt_saved_feature = defaultdict(list)
-        # # search_feat_in_nested_dict(news_profile, news_feature_names, tempt_saved_feature)
-        search_nested_dict_bfs(news_profile, news_feature_names, tempt_saved_feature)
+        user_feature = search_nested_dict_bfs(user_profile, user_feature_names, defaultdict(list))
 
-        len(tempt_saved_feature)
+        for news_id in news_profile:
+            news_data_ = news_profile[news_id]
+            instance_feature = search_nested_dict_bfs(news_data_, news_feature_names, user_feature.copy())
+            instances.append(instance_feature)
 
+    print(len(instances))
 
+    cPickle.dump(instances, open('raw_feature.dat', 'wb'), True)
 
 
