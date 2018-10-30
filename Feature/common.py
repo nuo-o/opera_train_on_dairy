@@ -1,4 +1,4 @@
-import argparse, datetime, os, logging, yaml, ujson, cPickle, time, pickle
+import argparse, datetime, os, logging, yaml, ujson, cPickle, time, pickle, pandas as pd
 from os import walk
 from collections import defaultdict
 
@@ -88,7 +88,7 @@ def search_nested_dict_bfs(root, item2search, saved_dict=None):
     found_item = set()
 
     if not saved_dict:
-        saved_dict = defaultdict(list)
+        saved_dict = {}
 
     while len(queue) and len(found_item)<len(item2search):
         node = queue.pop()
@@ -96,10 +96,13 @@ def search_nested_dict_bfs(root, item2search, saved_dict=None):
         if isinstance(node, dict):
             for k, v in node.items():
                 if k in item2search:
-                    saved_dict[k].append(v)
-                    found_item.add(k)
-                    if len(found_item) == len(item2search):
-                        return saved_dict
+                    if k in saved_dict.keys():
+                        logging.warnings('overlapped feature names')
+                    else:
+                        saved_dict[k] = v
+                        found_item.add(k)
+                        if len(found_item) == len(item2search):
+                            return saved_dict
                 elif isinstance(v, dict):
                     queue.append(v)
         elif isinstance(node, list):
@@ -108,67 +111,232 @@ def search_nested_dict_bfs(root, item2search, saved_dict=None):
 
     not_found_item = [ i for i in item2search if i not in found_item]
     for item in not_found_item:
-        saved_dict[item].append([None])
+        saved_dict[item] = None
 
     return saved_dict
 
 
+def extract_target_features_from_nested_jason(root, target_features, savedDict = None):
+    found_feature = set()
+    if not savedDict:
+        savedDict = {}
+
+    for key in root.keys():
+        if key in target_features:
+            if key in savedDict.keys():
+                continue
+                # logging.warnings("duplicate feature names")
+            else:
+                savedDict[key] = root[key]
+                found_feature.add(key)
+
+    not_found_feature = [a for a in target_features if a not in found_feature]
+
+    for feat in not_found_feature:
+        savedDict[feat] = None
+
+    return savedDict
+
+
+def clean_raw_dairy_2_df(active_records, feature_names):
+    instances = []
+    for user_data in active_records:
+        news_profile_ = user_data['news_profile']
+        user_profile_ = user_data['user_profile']
+
+        user_feature = extract_target_features_from_nested_jason(user_profile_,
+                                                                 feature_names['user_profile_feature_names'])
+
+        for news_entryid in news_profile_:
+            news_data_ = news_profile_[news_entryid]
+            news_feature_ = news_data_['news_feature']
+            context_ = news_data_['context']
+            label_ = news_data_['label']
+
+            instance_feature_ = user_feature.copy()
+            instance_feature_ = extract_target_features_from_nested_jason(context_,
+                                                                          feature_names['context_feature_names'],
+                                                                          instance_feature_)
+            instance_feature_ = extract_target_features_from_nested_jason(news_feature_,
+                                                                          feature_names['news_feature_names'],
+                                                                          instance_feature_)
+            instance_feature_['label'] = label_
+            instances.append(instance_feature_)
+
+    df = pd.DataFrame(instances)
+
+    return df
+
+
 if __name__ == "__main__":
+    t = time.time()
     args = parse_arguments()
     configs = yaml.load(args.config)
 
-    data_paths = get_dairy_path(configs, "20181016", "20181016")
+    data_paths = get_dairy_path(configs, "20180901", "20180901")
     print(data_paths)
     print( os.path.isdir(data_paths[0]))
 
-    user_feature_names = [
-        'app_version',
-        'nl_topic256',
-        'nl_topic64',
-        'news_device_id',
-        'os',
-        'phone_model',
-        'screen_height',
+    context_feature_names = [
+        'recall_source',
+        'push_ctr',
+        'recall_score',
+        'response_timestamp',
+        'news_publish_time_diff_hour_desc',
+        'channel',
+        'rank_score'
     ]
 
     news_feature_names = [
-        'content_length',
-        'country',
-        'domain_category_level',
-        'dup_flag',
-        'enter_timestamp',
-        'exp_scores',
-        'evergreen_confidence',
-        'first_occurrence_timestamp',
-        'hub_timestamp',
-        'index_type',
-        'language',
-        'last_timestamp',
-        'topic256',
-        'topic64',
-        'ttl',
-        'negative_feedback_keyword',
-        'news_publish_time_diff_hour_desc', # available feature?
-        'no_of_videos',
-        'no_of_pictures',
-        'partner',
-        'pictures',
-        'push_ctr',
-        'quality',
-        'recall_score',
-        'response_timestamp',
-        'sex'
+         'content_length',
+         'target_country',
+         'topic256',
+         'word_count',
+         # 'new_type',
+         'ttl',
+         'keywords',
+         # 'summary_length',
+         'title',
+         'max_disgusting_scores',
+         # 'cdn_pictures',
+         'location',
+         'title_keywords',
+         'hub_timestamp',
+         'push_source',
+         # 'news_state',
+         'timestamp',
+         # 'negative_feedback_category',
+         'mannual_keywords',
+         'nlp_timestamp',
+         'no_of_videos',
+         # 'expiration_timestamp',
+         'summary',
+         'disgusting_scores',
+         'crawler',
+         'domain',
+         # 'meta_keywords',
+         'sub_category',
+         # 'sex',
+         # 'ads_state',
+         'key_entities',
+         # 'images',
+         'exp_scores',
+         'enter_timestamp',
+         'category',
+         'body_addons',
+         'pictures',
+         'enter_type',
+         'sub_sub_category',
+         # 'combined_score', # std = 0
+         'supervised_keywords_v2',
+         # 'score',
+         'keywords_tag',
+         'thumbnail',
+         'hit_domain_blacklist',
+         'evergreen_confidence',
+         'image_mscv_scores',
+         'dup_flag',
+         'language',
+         'country',
+         'category_v2_cross',
+         'image_nsfw_scores',
+         'no_of_pictures',
+         'keywords_v2',
+         # 'relevant_entity',
+         # 'quality',
+         'key_entities_v2',
+         # 'sensitive_keywords',
+         # 'index_type',
+         'head_addons',
+         'supervised_keywords_v2_origin',
+         # 'quality_entity_original_format',
+         'list_title',
+         # 'domain_category_level',
+         # 'negative_feedback_keyword',
+         'topic2048',
+         # 'topic_evergreen',
+         # 'sanitized_html_length',
+         # 'low_taste_keywords',
+         'news_id',
+         'category_v2_score',
+         # 'gallery_type',
+         'topic_v2',
+         # 'quality_entity',
+         # 'last_timestamp',
+         'source_location',
+         'amp_url',
+         # 'ads_location',
+         'topic',
+         'seed',
+         'entry_id',
+         'anti_spam_processed_time',
+         'id',
+         'soure_num',
+         'spam_word_count',
+         'top_domain',
+         'imageserver',
+         'author',
+         'topic64',
+         'publication_time',
+         # 'subscribe_tags',
+         'first_occurrence_timestamp',
+         # 'news_location',
+         # 'evergreen',
+         'supervised_keywords',
+         # 'spelling_errors',
+         'gallery_pictures_num',
+         'url',
+         'original_url',
+         # 'title_spam_word_count',
+         'sub_sub_sub_category',
+         'key_entities_v2_hash'
     ]
 
-    # filter active user data
+    user_profile_feature_names = [
+         'nl_category',
+         'push_title_keywords',
+         'push_supervised_keywords',
+         'opera_id',
+         'news_device_id',
+         'push_keywords',
+         'timezone',
+         'push_topic2048',
+         'phone_model',
+         'nl_keywords',
+         # 'discover_id',
+         'push_subcategory',
+         'nl_topic2048',
+         'system_language',
+         'nl_topic256',
+         'app_version',
+         'nl_supervised_keywords',
+         'product',
+         'screen_width',
+         'push_topic256',
+         'nl_subcategory',
+         'push_topic64',
+         'nl_title_keywords',
+         'push_category',
+         # 'appboy_id',
+         'nl_topic64',
+         'app_language',
+         'manufacturer',
+         'nl_domain',
+         'push_topic',
+         'push_domain',
+         'nl_topic',
+         'os',
+         'screen_height']
+
+    # filter active, only keep records that has at least one click per user
     active_records = []
 
+    # for experiment: we only check one .csv file @@
     with open(data_paths[0]) as f:
         for user_data in f.readlines():
             jason_data = " ".join(user_data.split()[3:])
             nested_dict = ujson.loads(jason_data)
             news_profile = nested_dict['news_profile']
-            # user_profile = jason_data['user_profile']
 
             for news_id in news_profile.keys():
                 label = news_profile[news_id]['label']
@@ -180,21 +348,18 @@ if __name__ == "__main__":
     print("number of active records: {}".format(len(active_records)))
     print(len(active_records))
 
-    # extract features
-    instances = []
-    for user_data in active_records:
-        news_profile = user_data['news_profile']
-        user_profile = user_data['user_profile']
+    cPickle.dump(active_records, open('active_records.dat', 'wb'), True)
+    print('active_records have been dumped')
 
-        user_feature = search_nested_dict_bfs(user_profile, user_feature_names, defaultdict(list))
+    # normalize dairy, extract features we need
+    feature_names = {'context_feature_names': context_feature_names,\
+                     'news_feature_names': news_feature_names,\
+                     'user_profile_feature_names': user_profile_feature_names}
+    df = clean_raw_dairy_2_df(active_records, feature_names)
 
-        for news_id in news_profile:
-            news_data_ = news_profile[news_id]
-            instance_feature = search_nested_dict_bfs(news_data_, news_feature_names, user_feature.copy())
-            instances.append(instance_feature)
+    cPickle.dump(df, open('raw_feature.dat', 'wb'), True)
+    print('write')
 
-    print(len(instances))
-
-    cPickle.dump(instances, open('raw_feature.dat', 'wb'), True)
-
+    print( time.time() - t)
+    print('done')
 
