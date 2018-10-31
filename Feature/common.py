@@ -14,7 +14,7 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def get_dairy_path(config, start_date, end_date):
+def get_dairy_path(config, start_date, end_date, filetype = '.csv'):
     """input: date ranges for dairy data
         output: return all files path in that range"""
 
@@ -31,7 +31,7 @@ def get_dairy_path(config, start_date, end_date):
 
         if os.path.isdir(this_folder):
             for r,d,fn in walk(this_folder):
-                result_path.extend([os.path.join(r, f) for f in fn])
+                result_path.extend([os.path.join(r, f) for f in fn if f.endswith(filetype)])
         start_date += datetime.timedelta(days=1)
 
     if len(result_path)<1:
@@ -173,7 +173,8 @@ if __name__ == "__main__":
     args = parse_arguments()
     configs = yaml.load(args.config)
 
-    data_paths = get_dairy_path(configs, "20180901", "20180901")
+    data_paths = get_dairy_path(configs, "20181008", "20181008")
+
     print(data_paths)
     print( os.path.isdir(data_paths[0]))
 
@@ -208,9 +209,9 @@ if __name__ == "__main__":
          # 'negative_feedback_category',
          'mannual_keywords',
          'nlp_timestamp',
-         'no_of_videos',
+         # 'no_of_videos',
          # 'expiration_timestamp',
-         'summary',
+         # 'summary',
          'disgusting_scores',
          'crawler',
          'domain',
@@ -233,7 +234,7 @@ if __name__ == "__main__":
          'keywords_tag',
          'thumbnail',
          'hit_domain_blacklist',
-         'evergreen_confidence',
+         # 'evergreen_confidence',
          'image_mscv_scores',
          'dup_flag',
          'language',
@@ -264,12 +265,12 @@ if __name__ == "__main__":
          # 'quality_entity',
          # 'last_timestamp',
          'source_location',
-         'amp_url',
+         # 'amp_url',
          # 'ads_location',
          'topic',
          'seed',
          'entry_id',
-         'anti_spam_processed_time',
+         # 'anti_spam_processed_time',
          'id',
          'soure_num',
          'spam_word_count',
@@ -296,8 +297,8 @@ if __name__ == "__main__":
          'nl_category',
          'push_title_keywords',
          'push_supervised_keywords',
-         'opera_id',
-         'news_device_id',
+         # 'opera_id',
+         # 'news_device_id',
          'push_keywords',
          'timezone',
          'push_topic2048',
