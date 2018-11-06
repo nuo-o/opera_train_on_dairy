@@ -145,20 +145,20 @@ def extract_target_features_from_nested_jason(root, target_features, savedDict =
 
 def extract_dairy_feature(active_records, feature_names):
     instances = []
+    rank = []
     for user_data in active_records:
         news_profile_ = user_data['news_profile']
         user_profile_ = user_data['user_profile']
 
         user_feature = extract_target_features_from_nested_jason(user_profile_,
                                                                  feature_names['user_profile_feature_names'])
-        user_feature['has_clicked_today'] = 0
+        arg_val = []
         for news_entryid in news_profile_:
             news_data_ = news_profile_[news_entryid]
             news_feature_ = news_data_['news_feature']
             context_ = news_data_['context']
             label_ = news_data_['label']
-            user_feature['has_clicked_today'] += label_
-
+            
             user_feature_copy = user_feature.copy()
             user_feature_copy = extract_target_features_from_nested_jason(context_,
                                                                           feature_names['context_feature_names'],
@@ -166,14 +166,16 @@ def extract_dairy_feature(active_records, feature_names):
             user_feature_copy = extract_target_features_from_nested_jason(news_feature_,
                                                                           feature_names['news_feature_names'],
                                                                           savedDict=user_feature_copy)
-            # get rank features for this user            
-            user_feature_copy = extract_rank_features(user_feature_copy, \
-                                                      ['response_time'])
             user_feature_copy['label'] = label_
             
             instances.append(user_feature_copy)
+            arg_val.append( user_feature_copy['news_publish_time_diff_hour_desc'])
+            
+        arg_val = pd.Series(arg_val).rank()
+        rank.extend(arg_val.values)        
         
     instances = pd.DataFrame(instances)
+    instances['rank_news_publish_time_diff_hour_desc'] = rank
 
     return instances
 
