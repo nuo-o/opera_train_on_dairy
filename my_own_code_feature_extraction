@@ -1,0 +1,591 @@
+import argparse, datetime, os, logging, yaml, ujson, cPickle, time, pickle, pandas as pd, math, sys, numpy as np
+from os import walk
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+
+def hot_encoding(df, cols):
+    for col in cols:
+        if col == 'source_num':
+            break
+        df = pd.concat([df, pd.get_dummies(df[col], prefix=str(col))], axis=1)
+    return df
+
+
+def parse_arguments():
+    """Parse cli arguments
+    :returns: args object
+
+    """
+    parser = argparse.ArgumentParser(description='Recommendation Algo Experiments')
+    parser.add_argument("-c", "--config", type=argparse.FileType(mode='r'),
+                        help="Config file")
+    return parser.parse_args()
+
+
+def get_dairy_path(config, start_date, end_date, filetype='.csv'):
+    """input: date ranges for dairy data
+        output: return all files path in that range"""
+    folder = os.path.join(os.getcwd(), config['data_folder'])
+    result_path = []
+
+    if isinstance(start_date, str):
+        start_date = datetime.datetime.strptime(start_date, '%Y%m%d')
+    if isinstance(end_date, str):
+        end_date = datetime.datetime.strptime(end_date, '%Y%m%d')
+
+    while start_date <= end_date:
+        this_folder = os.path.join(folder, datetime.datetime.strftime(start_date, '%Y%m%d'))
+
+        if os.path.isdir(this_folder):
+            for r, d, fn in walk(this_folder):
+                result_path.extend([os.path.join(r, f) for f in fn if f.endswith(filetype)])
+        start_date += datetime.timedelta(days=1)
+
+    if len(result_path) < 1:
+        logging.warnings('No dairy retrieved.')
+
+    return result_path
+
+
+def read_files():
+    raise NotImplementedError
+    # read in all the files under the folder.
+    # jason starts by user_profile:
+    # extract corresponding keys
+    # tidy up to list of dict
+    # transform to panda dataframe
+
+
+def get_news_profile_from_dairy(filepath):
+    record = []
+    with open(filepath, 'r') as f:
+        for line in f.readlines():
+            # 'news_profiles' starts at index 3
+            news_profiles = " ".join(line.split()[3:])
+            news_profiles = ujson.loads(news_profiles)
+            record.append(news_profiles)
+    return record
+
+
+def separate_clicked_record(filepaths):
+    clicked_records = []
+    _clicked_records = []
+
+    for f in filepaths:
+        dairy = get_news_profile_from_dairy(f)
+
+        for user in dairy:
+
+            active_flag = False
+
+            for news_id in user['news_profile'].keys():
+                if user['news_profile'][news_id].get('label') == 1:
+                    active_flag = True
+                    break
+
+            if active_flag:
+                clicked_records.append(user)
+            else:
+                _clicked_records.append(user)
+    return clicked_records, _clicked_records
+
+
+def search_nested_dict_bfs(root, item2search, saved_dict=None):
+    queue = [root]
+    found_item = set()
+
+    if not saved_dict:
+        saved_dict = {}
+
+    while len(queue) and len(found_item) < len(item2search):
+        node = queue.pop()
+
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k in item2search:
+                    if k in saved_dict.keys():
+                        logging.warnings('overlapped feature names')
+                    else:
+                        saved_dict[k] = v
+                        found_item.add(k)
+                        if len(found_item) == len(item2search):
+                            return saved_dict
+                elif isinstance(v, dict):
+                    queue.append(v)
+        elif isinstance(node, list):
+            for i in node:
+                queue.append(i)
+
+    not_found_item = [i for i in item2search if i not in found_item]
+    for item in not_found_item:
+        saved_dict[item] = None
+
+    return saved_dict
+
+
+def extract_target_features_from_nested_jason(root, target_features, savedDict=None):
+    found_feature = set()
+    if not savedDict:
+        savedDict = {}
+
+    for key in root.keys():
+        if key in target_features:
+            if key not in savedDict.keys():
+                savedDict[key] = root[key]
+                found_feature.add(key)
+
+    not_found_feature = [a for a in target_features if a not in found_feature]
+
+    for feat in not_found_feature:
+        savedDict[feat] = None
+
+    return savedDict
+
+
+def parse_dairy_2_instance_df(active_records, feature_names):
+    instances = []
+    rank = []
+    rank_response_timestamp = []
+    for user_data in active_records:
+        news_profile_ = user_data['news_profile']
+        user_profile_ = user_data['user_profile']
+
+        user_feature = extract_target_features_from_nested_jason(user_profile_,
+                                                                 feature_names['user_profile_feature_names'])
+        arg_val = []
+        arg_val2 = []
+        for news_entryid in news_profile_:
+            news_data_ = news_profile_[news_entryid]
+            news_feature_ = news_data_['news_feature']
+            context_ = news_data_['context']
+            label_ = news_data_['label']
+
+            user_feature_copy = user_feature.copy()
+            user_feature_copy = extract_target_features_from_nested_jason(context_,
+                                                                          feature_names['context_feature_names'],
+                                                                          savedDict=user_feature_copy)
+            user_feature_copy = extract_target_features_from_nested_jason(news_feature_,
+                                                                          feature_names['news_feature_names'],
+                                                                          savedDict=user_feature_copy)
+            user_feature_copy['label'] = label_
+
+            instances.append(user_feature_copy)
+            arg_val.append(user_feature_copy['news_publish_time_diff_hour_desc'])
+            arg_val2.append(user_feature_copy['response_timestamp'])
+
+        arg_val = pd.Series(arg_val).rank()
+        arg_val2 = pd.Series(arg_val2).rank()
+        rank.extend(arg_val.values)
+        rank_response_timestamp.extend(arg_val2.values)
+
+    instances = pd.DataFrame(instances)
+    instances['rank_news_publish_time_diff_hour_desc'] = rank
+    instances['rank_response_timestamp'] = rank_response_timestamp
+
+    return instances
+
+
+def calculate_similarity(col_a, col_b, df):
+    def calculate_sim(dict_a, dict_b, sim_type='euc'):
+        sim = 0.0
+        norm_a = 0.0
+        norm_b = 0.0
+
+        for a_key in dict_a.keys():
+            if a_key in dict_b.keys():
+                if sim_type == 'euc':
+                    sim += (a[a_key] - b[a_key]) ** 2
+                elif sim_type == 'cos':
+                    sim += a[a_key] * b[a_key]
+                    norm_a += a[a_key] ** 2
+                    norm_b += b[a_key] ** 2
+                elif sim_type == 'abs':
+                    sim += abs(a[a_key] - b[a_key])
+                elif sim_type == 'jaccard':
+                    sim += 1
+
+        if sim:
+            if sim_type == 'euc':
+                sim = math.sqrt(sim)
+            elif sim_type == 'jaccard':
+                sim = sim / (len(dict_a.keys()) + len(dict_b.keys()) - sim)
+        return sim
+
+    merged_name = str(col_a) + '_' + str(col_b)
+    euc_name = merged_name + '_euc_sim'
+    cos_name = merged_name + '_cos_sim'
+    abs_name = merged_name + '_abs_sim'
+    jac_name = merged_name + '_jaccard_sim'
+    similarities = {euc_name: [], cos_name: [], abs_name: [], jac_name: []}
+
+    for i in range(len(df)):
+        a = df.iloc[i][col_a]
+        b = df.iloc[i][col_b]
+
+        # compute similarity
+        if a and b:
+            similarities[euc_name].append(calculate_sim(a, b, sim_type='euc'))
+            similarities[cos_name].append(calculate_sim(a, b, sim_type='cos'))
+            similarities[abs_name].append(calculate_sim(a, b, sim_type='abs'))
+            similarities[jac_name].append(calculate_sim(a, b, sim_type='jaccard'))
+        else:
+            similarities[euc_name].append(None)
+            similarities[cos_name].append(None)
+            similarities[abs_name].append(None)
+            similarities[jac_name].append(None)
+
+    return similarities
+
+
+def get_hardcoded_names():
+    context_feature_names = [
+        'news_publish_time_diff_hour_desc',
+        'push_ctr',
+        'rank_score',
+        'recall_score',
+        'recall_source',
+        'response_timestamp'
+        # 'channel', only push
+    ]
+
+    news_feature_names = [
+        'category_v2_score',
+        'content_length',
+        'dup_flag',
+        'enter_timestamp',
+        'exp_scores',
+        # 'image_mscv_scores', empty feature
+        'image_nsfw_scores',
+        # 'key_entities_v2',
+        # 'key_entities_v2_hash',
+        # 'key_entities',
+        'keywords',
+        'keywords_v2',
+        # 'language',
+        # 'location', contains many location that the editor eager to forward
+        'max_disgusting_scores',
+        'news_id',
+        'no_of_pictures',
+        # 'original_url', unique
+        # 'pictures',
+        # 'publication_time',
+        'push_source',
+        # 'seed',
+        'soure_num',
+        # 'spam_word_count',
+        'sub_category',
+        'supervised_keywords',
+        'target_country',
+        # 'timestamp', maybe duplicate with enter_timestamp
+        'topic',
+        'topic2048',
+        'topic256',
+        'topic64',
+        # 'title', do nothing for now
+        'title_keywords',
+        'ttl',
+        # 'url',
+        'word_count'
+    ]
+    # 'imageserver', only one value
+    # 'country',
+    # 'crawler', no idea how to deal this
+    # 'disgusting_scores', no idea how to deal it
+    # 'domain', no idea how to deal this
+    # 'enter_type', only val = crawler_news
+    # 'entry_id', too much if we train on a month-data
+    # 'first_occurrence_timestamp',
+    # 'hub_timestamp', kind of duplicate to timestamp and response_timestamp
+    # 'id', all unique values
+    # 'nlp_timestamp',no idea how to use this
+    # 'author', feels not very important
+    # 'thumbnail', more relevant to crawler
+    # 'source_location', no non-empty entries
+    # 'list_title', missing 99%
+    # 'gallery_pictures_num', only FALSE value
+    # 'hit_domain_blacklist', only FALSE value
+    # 'head_addons', meaningless to me
+    # 'body_addons', all null []
+    # 'topic_v2', least overlap key value with user_topic feature
+    # 'top_domain', no idea how to use this
+    # 'keywords_tag', no paird, and too much unique values
+    # 'mannual_keywords', all false
+    # 'supervised_keywords_v2', not many valuable values with user sv_keywords
+    # 'supervised_keywords_v2_origin',not many non-zero values with user sv_keywords
+    # 'category',
+    # 'category_v2_cross',
+    # 'new_type',
+    # 'summary_length',
+    # 'cdn_pictures',
+    # 'news_state',
+    # 'negative_feedback_category',
+    # 'no_of_videos',
+    # 'expiration_timestamp',
+    # 'summary',
+    # 'meta_keywords',
+    # 'sex',
+    # 'ads_state',
+    # 'images',
+    # 'combined_score', # std = 0
+    # 'score',
+    # 'evergreen_confidence',
+    # 'relevant_entity',
+    # 'quality',
+    # 'sensitive_keywords',
+    # 'index_type',
+    # 'quality_entity_original_format',
+    # 'domain_category_level',
+    # 'negative_feedback_keyword',
+    # 'topic_evergreen',
+    # 'sanitized_html_length',
+    # 'low_taste_keywords',
+    # 'gallery_type',
+    # 'quality_entity',
+    # 'last_timestamp',
+    # 'amp_url',
+    # 'ads_location',
+    # 'anti_spam_processed_time',
+    # 'subscribe_tags',
+    # 'news_location',
+    # 'evergreen',
+    # 'spelling_errors',
+    # 'title_spam_word_count',
+    # 'sub_sub_category',
+    # 'sub_sub_sub_category',
+
+    user_profile_feature_names = [
+        'app_language',
+        'app_version',
+        'news_device_id',
+        'manufacturer',
+        'nl_category',
+        # 'nl_domain',
+        'nl_keywords',
+        'nl_supervised_keywords',
+        'nl_title_keywords',
+        'nl_topic',
+        'nl_topic2048',
+        'nl_topic256',
+        'nl_topic64',
+        'nl_subcategory',
+        # 'os',
+        # 'phone_model', too unique
+        # 'product',
+        # 'push_domain', no idea how to use this
+        'push_keywords',
+        'push_topic',
+        'push_topic2048',
+        'push_topic256',
+        'push_topic64',
+        'push_supervised_keywords',
+        'push_title_keywords',
+        'screen_height',
+        'screen_width',
+        # 'system_language',
+        'timezone'
+    ]
+    # 'push_subcategory', too much missing values
+    # 'push_category', missing > 50%
+    # 'appboy_id',
+    # 'opera_id',
+    # 'discover_id',
+
+    feature_names = {'context_feature_names': context_feature_names, \
+                     'news_feature_names': news_feature_names, \
+                     'user_profile_feature_names': user_profile_feature_names}
+
+    return feature_names
+
+
+def get_active_dairy_record(dairy_path, printInfo=True, dump=False):
+    active_records = []
+
+    with open(dairy_path) as f:
+        for user_data in f.readlines():
+            jason_data = " ".join(user_data.split()[3:])
+            nested_dict = ujson.loads(jason_data)
+            news_profile = nested_dict['news_profile']
+
+            for news_id in news_profile.keys():
+                label = news_profile[news_id]['label']
+
+                if label:
+                    active_records.append(nested_dict)
+                    break
+
+    if printInfo:
+        print("number of active records: {}".format(len(active_records)))
+        print(len(active_records))
+    if dump:
+        cPickle.dump(active_records, open('active_records.dat', 'wb'), True)
+        print('active_records have been dumped')
+
+    return active_records
+
+
+# generate features pipeline.
+def feature_pipeline(df):
+    # The first pipeline mainly deals with dictionary data. Calculate their similarities.
+    # The second deals the other, such as app_version...
+    def calculate_all_similarities(paired_cols, df):
+        new_df = df.copy()
+        for c1, c2 in paired_cols:
+            sim = calculate_similarity(c1, c2, df)
+            new_df = new_df.join(pd.DataFrame(sim))
+
+        # deal with subcategory, as one of them is a string not a dict
+        sub_category_sim = []
+        for a, b in zip(df['nl_subcategory'], df['sub_category']):
+            if a and b:
+                if b in a.keys():
+                    sub_category_sim.append(a[b])
+                else:
+                    sub_category_sim.append(None)
+            else:
+                sub_category_sim.append(None)
+
+        new_df['sub_category_sim'] = sub_category_sim
+        return new_df
+
+    # compute similarities against category, keywords, topics
+    sim_pairs = [
+        ("nl_category", "category_v2_score"),
+        ("nl_keywords", "keywords"),
+        ("nl_keywords", "keywords_v2"),
+        ("nl_keywords", "push_keywords"),
+        ("nl_supervised_keywords", "supervised_keywords"),
+        ("nl_title_keywords", "title_keywords"),
+        ("supervised_keywords", "push_supervised_keywords"),
+        ("title_keywords", "push_title_keywords"),
+        ("topic", "nl_topic"),
+        ("topic2048", "push_topic2048"),
+    ]
+    newdf = calculate_all_similarities(sim_pairs, df)
+
+    new_df = feature_pipeline2(newdf)
+
+    return new_df
+
+
+def encode_standard_scaler(df, col):
+    for c in col:
+        df[c] = StandardScaler().fit_transform(np.array(df[c]).reshape(-1,1))
+    return df
+
+
+def feature_pipeline2(df):
+    # preprocess features
+    df['app_version'] = ['.'.join(app_v.split('.'))[:3] for app_v in df['app_version']]
+    df['exp_scores'] = [sum(i.values()) for i in df['exp_scores']]
+    df['image_nsfw_scores'] = [sum(i) for i in df['image_nsfw_scores']]
+    df['max_disgusting_scores'] = [sum(i.values()) for i in df['max_disgusting_scores']]
+    df['enter_hour'] = [np.sin(d.hour * np.pi / 12.0) for d in pd.to_datetime(df['enter_timestamp'])]
+    df['screen_size'] = df['screen_height'] * df['screen_width']
+
+    # dummy categorical variable
+    df = hot_encoding(df, ['app_version', 'manufacturer', 'timezone', 'app_language', \
+                           'target_country','push_source', 'recall_source', 'soure_num'])
+
+    # encode numerical variable
+    df = encode_standard_scaler(df, ['exp_scores', 'image_nsfw_scores', 'news_publish_time_diff_hour_desc',
+                                     'no_of_pictures', 'push_ctr', 'rank_score', 'recall_score', 'content_length',
+                                     'ttl', 'word_count'])
+
+    # drop
+    df = df.drop(['app_version', 'app_language', \
+                  "category_v2_score", \
+                  'enter_timestamp', "keywords", "keywords_v2", \
+                  'manufacturer',  "news_id",\
+                  "nl_category", "nl_keywords", "nl_supervised_keywords", "nl_title_keywords","nl_topic", \
+                  "nl_topic2048","nl_topic256", "nl_topic64","nl_subcategory",\
+                  "push_keywords", "push_supervised_keywords", "push_title_keywords", \
+                  "push_topic2048","push_topic256", "push_topic64","push_topic", \
+                  "response_timestamp", \
+                  'screen_height', 'screen_width', 'soure_num', "supervised_keywords","sub_category", \
+                  'timezone',"title_keywords","topic","topic2048","topic256","topic64"],
+                 axis=1)
+    return df
+
+
+def get_all_feature_values(df, col):
+    values = []
+
+    for v in df[col]:
+        if isinstance(v, dict):
+            values.extend(v.keys())
+        elif isinstance(v, list):
+            values.extend(v)
+        elif isinstance(v, str) or isinstance(v, unicode):
+            values.append(v)
+        else:
+            print(v)
+            raise ValueError(type(v))
+
+    return values, set(values)
+
+
+def count_non_values(df, col):
+    count = 0
+
+    for v in df[col]:
+        if not v:
+            count += 1
+        elif v == '':
+            count += 1
+    return count, len(df)
+
+
+def count_unqiue_values(values):
+    unique = []
+
+    for v in values:
+        if v not in unique:
+            unique.append(v)
+
+    return unique, len(unique)
+
+
+def filter_record(dairy_path, country_list, printInfo=True):
+    # filter: >= 1 click, country in country_list, product = news
+    active_records = []
+
+    with open(dairy_path) as f:
+        for user_data in f.readlines():
+            jason_data = " ".join(user_data.split()[3:])
+            nested_dict = ujson.loads(jason_data)
+            user_profile = nested_dict['user_profile']
+
+            if user_profile.get('product') != 'news':
+                continue
+
+            news_profile = nested_dict['news_profile']
+
+            for news_id in news_profile.keys():
+                label = news_profile[news_id]['label']
+                country = news_profile[news_id]['news_feature']['country']
+                if country in country_list and label:
+                    active_records.append(nested_dict)
+                    break
+
+    if printInfo:
+        print("number of active records: {}".format(len(active_records)))
+    return active_records
+
+
+if __name__ == "__main__":
+    t = time.time()
+    args = parse_arguments()
+    configs = yaml.load(args.config)
+
+    active_record = cPickle.load(open('./Feature/active_records_1.dat', 'rb'))
+    df = parse_dairy_2_instance_df(active_record, get_hardcoded_names())
+    feat_df = feature_pipeline(df)
+
+    cPickle.dump(feat_df, open('feature_1.dat', 'wb'), True)
+
+    print( 'takes:{}'.format( (time.time() - t)/60.0 ))
+    print('run works')
+
+
+    # feat_df = cPickle.load( open('feature_1.dat', 'rb'))
+    # feat_df.columns
