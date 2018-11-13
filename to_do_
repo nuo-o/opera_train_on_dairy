@@ -1,0 +1,50 @@
+import json
+
+# filter active user
+def if_active_user(s):
+    json_data = s.split('\t')[-1]
+    json_data = json.loads(json_data)
+    news_profile = json_data.get('news_profile')
+    user_profile = json_data.get('user_profile')
+    
+    active_flag = False
+    for news_id, news_feature in news_profile.items():
+        label = news_feature.get('label')
+        
+        if label:
+            active_flag = True
+            break
+            
+    return active_flag
+
+df_active_user_count = df.filter(if_active_user).count()
+print(df_active_user_count)
+
+
+# parse feature, concatenate with |, 
+def flat_json_features(s):
+    json_data = s.split('\t')[-1]
+    json_data = json.loads(json_data)
+    news_profile = json_data.get('news_profile')
+    user_profile = json_data.get('user_profile')
+    
+    labels = []
+    np_topic256s = []
+    np_context_response_ts = []
+    # extract feature in news_profile
+    for news_id, news_feature in news_profile.items():
+        # process label
+        label = news_feature.get('label')
+        labels.append(label)
+        
+        # extract feature in context
+        np_context_response_t = news_feature.get('context').get('response_timestamp')
+        np_context_response_ts.append(np_context_response_t)
+        
+        # extract feature in news_feature 
+        
+        
+    # extract feature in user_profile
+    
+    
+    return (labels, np_topic256s, np_context_response_ts)
